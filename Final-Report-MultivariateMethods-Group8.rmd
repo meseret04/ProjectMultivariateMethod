@@ -1,0 +1,544 @@
+---
+title: "Project Multivariate Methods Report Group 8"
+author: "Group 8: Meynen Frederik, Kerga Meseret Assefa, Volkova Anastasia"
+date: "23/5/2022"
+output:
+  pdf_document:
+    df_print: paged
+    number_sections: true
+mainfont: Arial
+header-includes: \usepackage{amsmath}
+fontsize: 14pt
+---
+
+```{r setup, include=FALSE}
+library("GrassmannOptim")
+library("Matrix")
+library("ldr")
+library("dplyr")
+library("tidyverse")
+library("rmarkdown")
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Introduction
+
+## Data & Data exploration
+
+
+```{r data, include=FALSE}
+##First we load and select the appropriate data
+load("CanadianWeather.rda")
+
+da <- CanadianWeather[[1]]
+da <- da[,,"Precipitation.mm"] #Filters out precipitation data
+
+head(da)
+```
+
+The available dataset contains the precipitation data of the following 35 Canadian cities:
+```{r, results=TRUE}
+## The 35 Canadian cities of interest
+colnames(da)
+```
+
+For each of the 35 cities we have 365 measurements, one for each day of the year. In addition to these measurements we also have metadata to our disposal. This metadata contains the region, province and coordinates of the Canadian cities.
+
+```{r metadata, include=FALSE}
+#We extract the metadata as well (region, province and coordinates).
+MetaData <- data.frame(city= colnames(da),
+                       region= as.factor(CanadianWeather$region),
+                       province= as.factor(CanadianWeather$province),
+                       coord = CanadianWeather$coordinates)
+head(MetaData)
+
+```
+
+As a first exploration of the data we plot the precipitation data of 3 of the Canadian Cities
+
+```{r}
+## 3 example plots
+
+par(mfrow=c(1,3))
+plot(1:365, da[,"Vancouver"], main = "Vancouver", xlab = "day", ylab = "precipitation(mm/day)")
+plot(1:365, da[,"Quebec"], main = "Quebec", xlab = "day", ylab = "precipitation(mm/day)")
+plot(1:365, da[,"Winnipeg"], main = "Winnipeg", xlab = "day", ylab = "precipitation(mm/day)")
+par(mfrow=c(1,1))
+```
+
+## Research Question
+The objective is to discover which cities have similar precipitation patterns, and which have dissimilar patterns.
+We need a 2-dimensional graph that shows each city as a point, such that cities with similar precipitation
+patterns are close to one another. We also want to understand the difference in rainfall patterns: in what
+sense do they differ? For example, in the example plots shown above Vancouver hade more precipitation in winter, Winnipeg had more in summer and Quebec had similar precipition all year round.
+
+## Functional Data Analysis
+
+### Introduction
+
+In this homework we will make use of the functional data analysis (FDA) approach.
+
+In FDA we consider functions as observations. For example, for each of the 35 cities we have $p= 365$
+observations on a precipitation function. To make this approach work we first have to transform the 365 observations to a single function. This function will contain fewer parameter estimates than the original number of observations, say $q < p = 365$. Thus each city will have its set of $q$ parameter estimates, and thus an $n × q$ data matrix can be constructed. These parameter estimates form now the input for the Multidimensional Scaling (MDS). To give a meaningful interpretation to the results, at the end we will back-transform our solution from the parameter space to the function space.
+
+### Transformation to functions
+
+
+In this homework we will make use of the $poly()$ function in R to transform a vector with the days at which measurements are available, to a matrix. For a given city $i$, the number of rows of the matrix equals the number of days, and each column corresponds to a basis function. The $(j, k)$th element of the matrix equals the $k$th basis function evaluated in the $j$th day ($t_{ij}$). Let $x_{ijk} = \phi_k(t_{ij})$ denote this element.
+
+This means we can write a statistical model for the measurements of city $i$ at time $j$: $Y_i(t_{ij})$,
+
+\[Y_i(t_{ij}) = \sum_{k=0}^{m} \theta_{ik} x_{ijk}  + \epsilon_{ij} \].
+
+For a given city $i$, this has the structure of a linear regression model with outcomes $Y_i(t_{ij}), \space with \space j = 1, \ldots , n$, and $q = m + 1$ regressors $x_{ijk}$.
+
+This model can also be written in matrix notation:
+
+\[Y_i = \theta_{i}^{t} X_{i}  + \epsilon_{i} \]
+
+Thus, first we must choose an appropriate number of basis functions $m$. To identify this number we look at the amount of basis functions that would give a low mean square error. To calculate the MSE of a single city we use the following code:
+
+```{r mcode, echo=TRUE}
+days <- 1:365
+days <- (days-min(days))/(diff(range(days))) ## rescaling
+
+
+# selecting m degree using Mean square error(MSE) 
+df_mse = data.frame()  # mse storage created for each city and degree 
+ncity = colnames(da)
+
+for (d in 1:20){ # Go through all possible values for m
+  phi<-poly(days,degree=d) #  polynomial degree d 
+  for (c in ncity){
+    m.c<-lm(da[,c]~phi) #  parameter estimation using linear regression
+    pred.c = predict(m.c, phi) # prediction made for each city and for a given degree
+  
+    mse<-sqrt(mean((da[,c] - pred.c )^2)) #  mse calculated for each city and for a given degree
+    tmp_df = data.frame(city= c, d=d, mse=mse) # store values of city, d and mse as data frame 
+    df_mse = rbind(df_mse, tmp_df) # store the value in df_mse
+  }
+}
+
+min_mse<- df_mse %>%
+dplyr::select(city, mse, d) %>%
+dplyr::group_by(city) %>%
+dplyr::summarise(mse= min(mse))
+
+
+ggplot(df_mse,aes(x= d, y= mse, color = city))+
+  geom_line(alpha=0.5)+
+  labs(y ="Mean squared error(MSE)", x = "Degree")+
+  geom_point(data = min_mse, color = "red",
+  shape = 1, size = 0.5)+
+  scale_y_continuous(breaks = seq(0, 3, by = 0.2))+
+  scale_x_continuous(breaks = seq(0, 20, by = 3))
+
+```
+
+This graph shows us that the minimum MSE for all cities occurs at $m = 20$ basis functions, which is not surprising, we expect the MSE to go down for higher numbers of $m$. But there is barely any change in MSE from $m=15$ basis functions onwards. This is why we will continue with $m=15$ basis functions.
+
+Now we can perform the actual transformation to functions.
+
+```{r functiontransformation, include=FALSE}
+## Creating the polynomial basis functions with degree 15
+
+phi <- poly(days, degree=15)
+
+## Creating the theta matrix from the polynomial basis functions
+
+m.da <- lm(da ~phi)
+Theta <- t(m.da$coefficients)
+dim(Theta)
+head(Theta)
+```
+
+The resulting $\Theta$ matrix contains the $\theta$ parameter estimates for all 35 cities and all basis functions ($16 = m+1$ because we add a column for the intercept). The $i$-th row of $\Theta$ is the vector $\hat\theta^t_i$ that contains the parameter estimates.
+This $\Theta$ matrix is now considered to be our data matrix and we can now apply MDS.
+
+### Multidimensional Scaling of Functions
+
+First we will column center the $\Theta$ matrix, after which we start the actual single value decomposition on the centered $\Theta$ Matrix
+
+```{r columncentering, include=FALSE}
+## Column-centering the Theta-matrix
+
+Theta.cent <- scale(Theta, center = TRUE, scale = FALSE)
+head(Theta.cent)
+
+colMeans(Theta.cent)
+```
+
+
+To check how many dimensions we would need to adequately approximate the data matrix we plot a scree plot:
+
+```{r svd, results= TRUE, fig.show=TRUE, echo=FALSE}
+## Performing a svd on the column-centered Theta matrix
+Theta.svd <- svd(Theta.cent)
+
+## Scree plot
+ssv <- Theta.svd$d^2/(sum(Theta.svd$d^2))
+plot(ssv,
+     type="l",
+     xlab = "k dimensions",
+     ylab="squared singular value")
+points(ssv)
+axis(side = 1, at = seq(0, 16, by =1))
+
+ssv[1]+ssv[2]
+```
+
+This scree plot shows that most (>92%) of the variability is retained with just 2 dimensions. Because of this we will use only $k=2$ dimensions.
+
+This means that in the fitted model:
+
+\[\hat Y = \Theta X^t\]
+
+the $Theta$ matrix can be substituted by its truncated SVD.
+
+\[\hat Y_2 = \Theta_2X^t = U_2D_2V_2^tX^t = Z_2V_2^tX^t\]
+
+# Results
+
+## Functional biplot
+
+We started by using the truncated SVD ($U_{k} \space and \space D_{k}$) to calculate the scores ($Z_k$)
+
+```{r scorecalc, include=FALSE}
+k<-2 ##number of dimensions
+
+# Creating the truncated U, D and Z matrices
+Uk<-Theta.svd$u[,1:k]
+Dk<-diag(Theta.svd$d[1:k])
+
+Zk<-Uk%*%Dk
+rownames(Zk) <- rownames(Theta)
+head(Zk)
+```
+
+Next we plotted the scores.
+
+```{r,  echo=FALSE}
+plot(Zk[,1], Zk[,2], xlab = "z1", ylab = "z2")
+text(Zk, rownames(Zk), cex = 0.7)
+abline(v=0,lty=2,col=4)
+abline(h=0,lty=2,col=4)
+```
+
+Since we column-centered $\Theta$ the origin corresponds with the average precipitation function. As we can see there are some cities with large negative values along the first dimension (Pr. Rupert, Vancouver and Victoria) and some with large positive (Pr. Rupert) and large negative (Vancouver, Victoria) scores along the second dimension.
+
+Note that there is also a very clear outlier (Pr. Rupert). The precipitation pattern in this city is thus very different from the other cities. It is possible that this outlier influences the result because of its relative large distance to all other points in the original space. This might also explain the slope seen in the other data points. To make sure that this city didn't influence our results we performed the SVD again without Pr. Rupert. At a first glance excluding this outlier doesn't seem to change our interpretation much. More information can be found in the appendix.
+
+
+To better understand the position of the different cities we will use the metadata to differentiate between regions.
+
+```{r}
+plot(Zk[,1],
+     Zk[,2],
+     xlab = "z1",
+     ylab = "z2",
+     col = as.numeric(MetaData$region), ## Color by region
+     pch=19)
+##ind.label <- which(abs(Zk[,1]) > 10)
+##text(Zk[ind.label,1], Zk[ind.label,2], rownames(Zk)[ind.label], cex = 0.8)
+abline(v=0,lty=2,col=4) ## drawing the functional means
+abline(h=0,lty=2,col=4)
+legend("topright",
+       legend=unique(MetaData$region),
+       pch=19,
+       col=unique(MetaData$region))
+```
+
+This graph shows that cities in the Contintental region have similar precipitation patterns (they all have a positive Z1 and a Z2 close to the average). The same is true for cities in the Arctic region.  Cities in the Atlantic region have an interesting distribution on this biplot. When Z1 is negative, Z2 is negative as well. When Z1 is positive, Z2 tends to be positive as well. Cities in the Pacific region show the most erratic pattern. Three of the cities in the Pacific region (namely Pr. Rupert, Vancouver and Victoria) have the lowest Z1 and the most extreme Z2 values while the 2 other cities (Pr. George, Kamloops) are very close to the functional mean.
+
+## Backtransformation
+To beter understand the meaning behind the values of the Z1 and Z2 scores we will backtransform the SVD to the original function space. We do this because constructing a biplot from the SVD of the $\Theta$ matrix would create a hard to interpret graph, since the arrows would point to the different basis functions.
+
+Note that from the previous paragraph we had that the approximate model fit was
+
+\[\hat Y_2 = \Theta_2X^t = U_2D_2V_2^tX^t = Z_2V_2^tX^t\]
+
+The matrix X is the matrix that connects the basis functions to the $/theta$-parameters. This model fit can thus also be written as:
+
+\[\hat Y_{2ij}(t) =  \sum_{d=1}^2\sum_{r=0}^{15}z_{2id}v_{rd}\phi_r(t)\]
+
+Since we column-centered the $\Theta$ we took out the average precipitation function, so it is better written as:
+
+\[\hat Y_{2ij}(t) = \bar Y(t) + \sum_{d=1}^2\sum_{r=0}^{15}z_{2id}v_{rd}\phi_r(t)\]
+
+This formula now gives us the ability to look at the effect of the scores. 
+
+```{r}
+# right singular vectors (loadings)
+Vk<-Theta.svd$v[,1:k] # Creating the truncated Vk matrix
+X<-cbind(1,phi) # constructing the design matrix for the lm with a 1 column added for the degree 0 polynomial)
+
+XV<-X%*%Vk # product of this X matrix with the Vk matrix 
+
+# X times the vector with the column means of the original Theta matrix gives an estimate of the average precipitation function
+Theta.mean <- colMeans(Theta)
+mean.curve<-X%*%Theta.mean
+plot(days*365,
+     mean.curve,
+     xlab = "day",
+     ylab = "Precipitation (mm/day)",
+     lwd = 1.5,
+     xaxt='n',    
+     type="l")
+axis(side = 1, at = seq(0, 365, by =30))
+```
+
+The mean curve shows that most of the precipation for the average city (close to the origin) occurs in the second half of the year (days 150-onwards). 
+
+To check the backtransformation we will reprise the three example plots of paragraph 1.1 with $\hat Y_{2i}(t)$ added to it.
+```{r}
+par(mfrow=c(1,3))
+plot(1:365,
+     da[,"Vancouver"],
+     main = "Vancouver",
+     xlab = "day",
+     ylab = "precipitation(mm/day)",
+     xaxt = "n")
+axis(side = 1, at = seq(0, 365, by =30))
+lines(days*365,
+      mean.curve+XV[,1]*Zk["Vancouver",1]+XV[,2]*Zk["Vancouver",2],
+      col=4,
+      lwd = 1.5)
+
+plot(1:365,
+     da[,"Quebec"],
+     main = "Quebec",
+     xlab = "day",
+     ylab = "precipitation(mm/day)",
+     xaxt = "n")
+axis(side = 1, at = seq(0, 365, by =30))
+lines(days*365,
+      mean.curve+XV[,1]*Zk["Quebec",1]+XV[,2]*Zk["Quebec",2],
+      col=4,
+      lwd = 1.5)
+
+plot(1:365,
+     da[,"Winnipeg"],
+     main = "Winnipeg",
+     xlab = "day",
+     ylab = "precipitation(mm/day)",
+     xaxt = "n")
+axis(side = 1, at = seq(0, 365, by =30))
+lines(days*365,
+      mean.curve+XV[,1]*Zk["Winnipeg",1]+XV[,2]*Zk["Winnipeg",2],
+      col=4,
+      lwd = 1.5)
+
+par(mfrow=c(1,1))
+```
+
+To interpret the Z1 scores we will plot $\hat Y_{2i}(t)$ with $z_{2i1}$ variating between -10, 0 and 10 and $z_{2i2}$ fixed at 0.
+
+```{r}
+rng<-range(mean.curve+XV[,1]*-10,mean.curve+XV[,1]*10)
+plot(days*365,
+     mean.curve,
+     type="l",
+     ylim=rng,
+     lwd = 1.5,
+     xlab="day",
+     xaxt='n',
+     ylab="Precipitation (mm/day)")
+axis(side = 1, at = seq(0, 365, by =30))
+lines(days*365,
+      mean.curve+XV[,1]*-10,
+      col=4,
+      lwd = 1.5)
+lines(days*365,
+      mean.curve+XV[,1]*10,
+      col=2,
+      lwd = 1.5)
+legend(x = "top",
+       inset = 0.05,
+       title = "Z1",
+       legend = c(-10, 0, 10),
+       lty = c(1,1,1),
+       col = c(4, 1, 2))
+```
+
+This graph shows that cities with a higher score on Z1 have, in comparison to the mean, low precipitation in the beginning (days 0-100) and end (days 300-365) of the year. Example cities are Calgary, Winnipeg and Edmonton.
+Cities with a negative Z1 score follow an inverted pattern with high precipitation in the beginning and end of the year. Examples of such cities are Pr. Rupert, Vancouver and Victoria.
+
+To interpret the Z2 scores we will produce a similar plot of $\hat Y_{2i}(t)$ with $z_{2i2}$ variating between -10, 0 and 10 and $z_{2i1}$ fixed at 0.
+
+```{r}
+rng<-range(mean.curve+XV[,2]*-10,mean.curve+XV[,2]*10)
+  plot(days*365,
+     mean.curve,
+     type="l",
+     ylim=rng,
+     lwd = 1.5,
+     xlab="day",
+     xaxt='n',
+     ylab="Precipitation (mm/day)")
+axis(side = 1, at = seq(0, 365, by =30))
+lines(days*365,
+      mean.curve+XV[,2]*-10,
+      col=4,
+      lwd = 1.5)
+lines(days*365,
+      mean.curve+XV[,2]*10,
+      col=2,
+      lwd = 1.5)
+legend(x = "topleft",
+       inset = 0.05,
+       title = "Z2",
+       legend = c(-10, 0, 10),
+       lty = c(1,1,1),
+       col = c(4, 1, 2))
+```
+
+This graph shows that cities with a high score on the Z2 have higher precipitation overall compared to the mean but especially during autumn (between days 240 and 320). Examples of such cities are Pr. Rupert, Scheffervll and Churchill.
+Negative scores follow an inverted pattern with lower precipiation overall compared to the mean but especially lowered during autumn. Example of such cities are Victoria, Vancouver and Halifax (The Continental and Arctic cities in general).
+
+# Conclusion
+
+Our analysis of the Canadian weather data shows that precipitation in cities differs mainly along 2 lines. The main difference is the precipitation in the beginning and end of the year. The second difference is precipitation in autumn. On average there is more precipitation in the second half of the year.
+
+We saw that cities in the Continental region have similar precipitation patterns, with low precipitation in the beginning and end of the year, and close to average precipitation in autumn. Arctic cities follow a similar pattern.
+
+Cities in the Atlantic region have either high precipitation in the beginning and end of the year and low in autumn, or the other way around. The precipitation patterns of the Pacific Region were erratic.
+
+# Appendix
+As discussed in section 2.1 we have repeated the SVD with exclusion of the outlier (Pr. Rupert). We briefly discuss these results here.
+
+* There is no longer a 'slanted' pattern in the biplot
+* The biplot still groups cities in Continental and Arctic region together
+* The average precipitation is very similar as in the main analysis
+* Z1 has a similar interpretation
+* Z2 however has a different interpretation now. It does no longer only include precipitation in autumn, but also earlier in the year (days 30-120)
+
+```{r}
+## Excluding pr. Rupert from the data and metadata
+da2 <- da[,-29]
+MetaData2 <- MetaData[-29,]
+
+m.da2 <- lm(da2 ~phi)
+Theta2 <- t(m.da2$coefficients)
+
+## Column-centering the Theta-matrix
+
+Theta.cent2 <- scale(Theta2, center = TRUE, scale = FALSE)
+
+## Performing a svd on the column-centered Theta matrix
+Theta.svd2 <- svd(Theta.cent2)
+
+
+## Scree plot
+ssv2 <- Theta.svd2$d^2/(sum(Theta.svd2$d^2))
+plot(ssv2,
+     type="l",
+     xlab = "k dimensions",
+     ylab="squared singular value")
+axis(side = 1, at = seq(0, 16, by =1))
+
+ssv2[1]+ssv2[2]
+
+k<-2 ##number of dimensions
+
+# Creating the truncated U, D and Z matrices
+Uk2<-Theta.svd2$u[,1:k]
+Dk2<-diag(Theta.svd2$d[1:k])
+
+Zk2<-Uk2%*%Dk2
+rownames(Zk2) <- rownames(Theta2)
+
+
+# Plot Z1 and Z2
+plot(Zk2[,1], Zk2[,2], xlab = "z1", ylab = "z2")
+text(Zk2, rownames(Zk2), cex = 0.7)
+abline(v=0,lty=2,col=4)
+abline(h=0,lty=2,col=4)
+
+
+#Plot by including metadata
+plot(Zk2[,1],
+     Zk2[,2],
+     xlab = "z1",
+     ylab = "z2",
+     col = as.numeric(MetaData2$region), ## Color by region
+     pch=19)
+##ind.label <- which(abs(Zk[,1]) > 10)
+##text(Zk[ind.label,1], Zk[ind.label,2], rownames(Zk)[ind.label], cex = 0.8)
+abline(v=0,lty=2,col=4) ## drawing the functional means
+abline(h=0,lty=2,col=4)
+legend("topright",
+       legend=unique(MetaData2$region),
+       pch=19,
+       col=unique(MetaData2$region))
+
+# right singular vectors (loadings)
+Vk2<-Theta.svd2$v[,1:k] # Creating the truncated Vk matrix
+X2<-cbind(1,phi) # constructing the design matrix with a 1 colum added for the degree 0 polynomial)
+
+XV2<-X2%*%Vk2 # product of this X matrix with the Vk matrix
+
+# X times the vector with the column means of the original Theta matrix gives an estimate of the average precipitation function
+Theta.mean2 <- colMeans(Theta2)
+mean.curve2<-X2%*%Theta.mean2
+plot(days*365,
+     mean.curve2,
+     xlab = "day",
+     ylab = "Precipitation (mm/day)",
+     lwd = 1.5,
+     xaxt='n',    
+     type="l")
+axis(side = 1, at = seq(0, 365, by =30))
+
+
+rng<-range(mean.curve2+XV2[,1]*-10,mean.curve2+XV2[,1]*10)
+plot(days*365,
+     mean.curve2,
+     type="l",
+     ylim=rng,
+     lwd = 1.5,
+     xlab="day",
+     xaxt='n',
+     ylab="Precipitation (mm/day)")
+axis(side = 1, at = seq(0, 365, by =30))
+lines(days*365,
+      mean.curve2+XV2[,1]*-10,
+      col=4,
+      lwd = 1.5)
+lines(days*365,
+      mean.curve2+XV2[,1]*10,
+      col=2,
+      lwd = 1.5)
+legend(x = "top",
+       inset = 0.05,
+       title = "Z1",
+       legend = c(-10, 0, 10),
+       lty = c(1,1,1),
+       col = c(4, 1, 2))
+
+
+rng<-range(mean.curve2+XV2[,2]*-6,mean.curve2+XV2[,2]*6)
+plot(days*365,
+     mean.curve2,
+     type="l",
+     ylim=rng,
+     lwd = 1.5,
+     xlab="day",
+     xaxt='n',
+     ylab="Precipitation (mm/day)")
+axis(side = 1, at = seq(0, 365, by =30))
+lines(days*365,
+      mean.curve2+XV2[,2]*-6,
+      col=4,
+      lwd = 1.5)
+lines(days*365,
+      mean.curve2+XV2[,2]*6,
+      col=2,
+      lwd = 1.5)
+legend(x = "topleft",
+       inset = 0.05,
+       title = "Z2",
+       legend = c(-6, 0, 6),
+       lty = c(1,1,1),
+       col = c(4, 1, 2))
+
+```
